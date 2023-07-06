@@ -1,0 +1,555 @@
+# Air Exchanger v0.1.0
+esphome:
+  name: air-exchanger
+  friendly_name: Air Exchanger
+  on_boot:
+    priority: 250
+    then:
+      # Force the hrv_state automation to run on boot to return any previously running scripts
+      - lambda: id(hrv_state).publish_state(id(hrv_state).state);
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino #must be arduino to support bsec library
+    # type: esp-idf
+
+preferences:
+  flash_write_interval: 10min
+
+# Enable logging
+logger:
+  level: DEBUG
+
+# Enable Home Assistant API
+api:
+  encryption:
+    key: !secret api_key
+
+ota:
+  password: !secret ota_password  
+
+i2c:
+  - id: "i2cbus"
+    sda: GPIO18
+    scl: GPIO19
+    scan: true
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  reboot_timeout: 90min 
+  manual_ip:
+    static_ip: 192.168.0.94
+    gateway: 192.168.0.1
+    subnet: 255.255.255.0
+  # power_save_mode: none
+
+esp32_ble_tracker:
+  scan_parameters:
+    interval: 1100ms
+    window: 1100ms
+    active: true
+
+bluetooth_proxy:
+  active: true
+
+globals:
+  - id: previous_state
+    type: std::string
+    restore_value: no
+    # initial_value: "" 
+  - id: high_cfm
+    type: int
+    initial_value: '150'
+  - id: low_cfm
+    type: int
+    initial_value: '66'
+
+bme680_bsec:
+  - address: 0x76
+    i2c_id: "i2cbus"
+    # temperature_offset: 0.0
+    iaq_mode: static
+    sample_rate: lp
+    state_save_interval: 6h
+    id: bme680_stale
+  - address: 0x77
+    i2c_id: "i2cbus"
+    # temperature_offset: 0.0
+    iaq_mode: static
+    sample_rate: lp
+    state_save_interval: 6h
+    id: bme680_fresh
+
+
+select:
+  - platform: template
+    name: Mode
+    id: mode
+    options:
+      - "Max"
+      - "Intermittent"
+      - "Intermittent (Custom)"
+      - "Min"
+      - "Idle"
+    restore_value: true
+    initial_option: "Idle"
+    on_value:
+      then:
+        lambda: !lambda |-
+          ESP_LOGD("custom", "Entered the lambda");
+          if (x == "Max") {
+            id(hrv_state).publish_state("Max");
+          } else if (x == "Intermittent") {
+            id(hrv_state).publish_state("Intermittent");
+          } else if (x == "Intermittent (Custom)") {
+            id(hrv_state).publish_state("Intermittent (Custom)");
+          } else if (x == "Min") {
+            id(hrv_state).publish_state("Min");
+          } else {
+            id(hrv_state).publish_state("Idle");
+          }
+    optimistic: true
+
+text_sensor:
+  - platform: template
+    icon: mdi:fan
+    name: Current State
+    id: hrv_state
+    update_interval: 120min #this sensor always has its value pushed to it
+    on_value: 
+      then: 
+        lambda: |-
+          std::string state_value = x;  //get trigger value
+          if (state_value == "Max") {
+            id(fan_high).execute();
+          } else if (state_value == "Intermittent") {
+            id(fan_intermittent).execute();
+          } else if (state_value == "Intermittent (Custom)") {
+            id(fan_intermittent_custom).execute();
+          } else if (state_value == "Min") {
+            id(fan_low).execute();
+          } else if (state_value == "Turbo") {
+            id(turbo_sequence).execute();
+          } else if (state_value == "Hold") {
+            id(hold_sequence).execute();
+          } else {
+            id(idle_sequence).execute();
+          }
+
+  - platform: template
+    icon: mdi:fan
+    name: Fan Speed
+    id: fan_speed
+    lambda: |-
+      int state = (id(high).state << 2) | (id(intermittent).state << 1) | (id(low).state);
+      switch (state) {
+        case 0:
+          return {"Idle"};
+        case 1:
+          return {"Low"};
+        case 2:
+          return {"Intermittent"};
+        case 4:
+          return {"High"};
+        default:
+          return {"Error"};
+      }
+    on_value:
+      then: 
+        lambda: |-
+          std::string state_value = x;  //get trigger value
+          if (state_value == "High") {
+            id(air_cfm).publish_state(id(high_cfm));
+          } else if (state_value == "Low") {
+            id(air_cfm).publish_state(id(low_cfm));
+          } else if (state_value == "Idle") {
+            id(air_cfm).publish_state(0);
+          } else {
+            id(air_cfm).publish_state(-1);
+          }
+  
+  - platform: bme680_bsec
+    bme680_bsec_id: bme680_stale
+    iaq_accuracy:
+      name: "Stale IAQ Accuracy"
+
+  - platform: template
+    name: "Stale IAQ Classification"
+    icon: "mdi:checkbox-marked-circle-outline"
+    lambda: |-
+      if ( int(id(stale_iaq).state) <= 50) {
+        return {"Excellent"};
+      }
+      else if (int(id(stale_iaq).state) >= 51 && int(id(stale_iaq).state) <= 100) {
+        return {"Good"};
+      }
+      else if (int(id(stale_iaq).state) >= 101 && int(id(stale_iaq).state) <= 150) {
+        return {"Lightly polluted"};
+      }
+      else if (int(id(stale_iaq).state) >= 151 && int(id(stale_iaq).state) <= 200) {
+        return {"Moderately polluted"};
+      }
+      else if (int(id(stale_iaq).state) >= 201 && int(id(stale_iaq).state) <= 250) {
+        return {"Heavily polluted"};
+      }
+      else if (int(id(stale_iaq).state) >= 251 && int(id(stale_iaq).state) <= 350) {
+        return {"Severely polluted"};
+      }
+      else if (int(id(stale_iaq).state) >= 351) {
+        return {"Extremely polluted"};
+      }
+      else {
+        return {"error"};
+      }
+  
+  - platform: bme680_bsec
+    bme680_bsec_id: bme680_fresh
+    iaq_accuracy:
+      name: "Fresh IAQ Accuracy"
+
+  - platform: template
+    name: "Fresh IAQ Classification"
+    icon: "mdi:checkbox-marked-circle-outline"
+    lambda: |-
+      if ( int(id(fresh_iaq).state) <= 50) {
+        return {"Excellent"};
+      }
+      else if (int(id(fresh_iaq).state) >= 51 && int(id(fresh_iaq).state) <= 100) {
+        return {"Good"};
+      }
+      else if (int(id(fresh_iaq).state) >= 101 && int(id(fresh_iaq).state) <= 150) {
+        return {"Lightly polluted"};
+      }
+      else if (int(id(fresh_iaq).state) >= 151 && int(id(fresh_iaq).state) <= 200) {
+        return {"Moderately polluted"};
+      }
+      else if (int(id(fresh_iaq).state) >= 201 && int(id(fresh_iaq).state) <= 250) {
+        return {"Heavily polluted"};
+      }
+      else if (int(id(fresh_iaq).state) >= 251 && int(id(fresh_iaq).state) <= 350) {
+        return {"Severely polluted"};
+      }
+      else if (int(id(fresh_iaq).state) >= 351) {
+        return {"Extremely polluted"};
+      }
+      else {
+        return {"error"};
+      }
+
+switch:
+  - platform: gpio
+    name: Short
+    internal: true
+    id: high
+    pin: 
+      number: GPIO17
+      mode: OUTPUT
+    interlock: [intermittent, low]
+    interlock_wait_time: 1s
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      - text_sensor.template.publish:
+          id: fan_speed
+          state: High
+    on_turn_off:
+      - text_sensor.template.publish:
+          id: fan_speed
+          state: Idle
+
+  - platform: gpio
+    name: 180kOhm
+    internal: true
+    id: intermittent
+    pin: 
+      number: GPIO16
+      mode: OUTPUT
+    interlock: [high, low]
+    interlock_wait_time: 1s
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      - text_sensor.template.publish:
+          id: fan_speed
+          state: Intermittent
+    on_turn_off:
+      - text_sensor.template.publish:
+          id: fan_speed
+          state: Idle
+
+  - platform: gpio
+    name: 47kOhm
+    internal: true
+    id: low
+    pin: 
+      number: GPIO15
+      mode: OUTPUT
+    interlock: [high, intermittent]
+    interlock_wait_time: 1s
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      - text_sensor.template.publish:
+          id: fan_speed
+          state: Low
+    on_turn_off:
+      - text_sensor.template.publish:
+          id: fan_speed
+          state: Idle
+
+sensor:
+  - platform: wifi_signal
+    name: Wifi RSSI
+    update_interval: 60s
+  - platform: uptime
+    name: Uptime
+    update_interval: 60s
+
+  - platform: template
+    name: Air Flow
+    id: air_cfm
+    icon: mdi:air-filter
+    unit_of_measurement: "cfm"
+    state_class: measurement
+
+  - platform: integration
+    sensor: air_cfm
+    name: Cumulative Air Flow
+    id: air_cumulative
+    unit_of_measurement: ft³
+    time_unit: min
+    device_class: volume
+    state_class: total_increasing
+
+  - platform: integration
+    sensor: air_cfm
+    name: Daily Air Changes
+    id: air_changes
+    unit_of_measurement: ""
+    state_class: total_increasing
+    time_unit: min
+    filters:
+      - multiply: 0.0000625 #estimate
+
+  - platform: bme680_bsec
+    bme680_bsec_id: bme680_stale
+    temperature: 
+      name: "Stale Temperature"
+    pressure:
+      name: "Stale Pressure"
+    humidity:
+      name: "Stale Humidity"
+    gas_resistance:
+      name: "Stale Gas Resistance"
+    iaq:
+      name: "Stale IAQ"
+      id: stale_iaq
+    # iaq_accuracy:
+    #   name: "Stale IAQ Accuracy"
+    co2_equivalent:
+      name: "Stale CO2 Equivalent"
+    breath_voc_equivalent:
+      name: "Stale Breath VOC Equivalent"
+
+  - platform: bme680_bsec
+    bme680_bsec_id: bme680_fresh
+    temperature: 
+      name: "Fresh Temperature"
+    pressure:
+      name: "Fresh Pressure"
+    humidity:
+      name: "Fresh Humidity"
+    gas_resistance:
+      name: "Fresh Gas Resistance"
+    iaq:
+      name: "Fresh IAQ"
+      id: fresh_iaq
+    # iaq_accuracy:
+    #   name: "Fresh IAQ Accuracy"
+    co2_equivalent:
+      name: "Fresh CO2 Equivalent"
+    breath_voc_equivalent:
+      name: "Fresh Breath VOC Equivalent"
+
+
+time:
+  - platform: homeassistant
+    id: homeassistant_time
+    on_time:
+      # Reset the cumulative airflow at midnight
+      - seconds: 0
+        minutes: 0
+        hours: 0
+        then: 
+          - sensor.integration.reset: air_cumulative
+          - sensor.integration.reset: air_changes
+
+#   - platform: template
+#     id: fan_speed_float
+#     internal: true
+#     lambda: |-
+#       int state = (id(high).state << 2) | (id(intermittent).state << 1) | (id(low).state);
+#       switch (state) {
+#         case 0:
+#           return 0;     //idle
+#         case 1:
+#           return 0.66;  //min
+#         case 2:
+#           return 0.33;  //intermittent
+#         case 4:
+#           return 1;     //max
+#         default:
+#           return -1;
+#       }
+
+# fan:
+#   - platform: speed
+#     output: fan_speed_float
+#     name: Air Exchanger
+#     speed_count: 3
+    # on_speed_set:
+    #   - lambda: |-
+
+button:
+  - platform: template
+    name: Turbo
+    id: turbo_button
+    icon: mdi:car-turbocharger
+    on_press:
+      - globals.set:
+          id: previous_state
+          value: !lambda |-
+            if ( (id(previous_state) == "Turbo") || (id(previous_state) == "Hold") ) {
+              return id(previous_state); //don't change previous state
+            } else {
+              return id(hrv_state).state;
+            }
+      - text_sensor.template.publish:
+          id: hrv_state
+          state: Turbo
+
+  - platform: template
+    name: Hold
+    id: hold_botton
+    icon: mdi:fan-off
+    on_press:
+      - globals.set:
+          id: previous_state
+          value: !lambda |-
+            if ( (id(previous_state) == "Turbo") || (id(previous_state) == "Hold") ) {
+              return id(previous_state); //don't change previous state
+            } else {
+              return id(hrv_state).state;
+            }
+      - text_sensor.template.publish:
+          id: hrv_state
+          state: Hold
+
+script:
+  - id: idle_sequence
+    mode: single
+    then:
+      - logger.log: "Setting fan to idle"
+      - switch.turn_off: high
+      - switch.turn_off: low
+      - switch.turn_off: intermittent
+      - sensor.template.publish:
+          id: air_cfm
+          state: 0
+
+  - id: fan_low
+    mode: single
+    then:
+      - logger.log: "Setting fan speed to low"
+      - switch.turn_on: low
+      # - sensor.template.publish:
+      #     id: air_cfm
+      #     state: 66
+
+  - id: fan_high
+    mode: single
+    then:
+      - logger.log: "Setting fan speed to high"
+      - switch.turn_on: high
+      # - sensor.template.publish:
+      #     id: air_cfm
+      #     state: 150
+
+  - id: fan_intermittent
+    mode: single
+    then:
+      - logger.log: "Setting fan speed to intermittent"
+      - switch.turn_on: intermittent
+
+  - id: fan_intermittent_custom
+    mode: restart
+    then:
+      - logger.log: "Intermittent loop started"
+      - logger.log: "[Intermittent] ON phase"
+      - script.execute: fan_low
+      - delay: 20min
+      # Check that the HRV is still the current state
+      - if:
+          condition:
+            text_sensor.state:
+              id: hrv_state
+              state: "Intermittent (Custom)"
+          then: 
+            - script.execute: idle_sequence
+            - logger.log: "[Intermittent] OFF phase"
+          else: 
+            script.stop: fan_intermittent_custom
+      - delay: 40min
+      - if:
+          condition:
+            text_sensor.state:
+              id: hrv_state
+              state: "Intermittent (Custom)"     
+          then:
+            script.execute: fan_intermittent_custom
+
+  - id: turbo_sequence
+    mode: single
+    then: 
+      - if: 
+          condition:
+            lambda: 'return (id(previous_state) != "Turbo");'
+          then:
+            - logger.log: "Turbo sequence started"
+            - script.execute: fan_high
+            - delay: 60min
+            - logger.log: "Hold timer elapsed"
+            - lambda: !lambda |-
+                std::string old_state = {id(previous_state)};
+                ESP_LOGD("custom", "Previous state: %s", old_state.c_str());
+                id(hrv_state).publish_state(old_state);
+                ESP_LOGD("custom", "Turbo Sequence ended");
+          else:
+            - lambda: !lambda ESP_LOGD("custom", "State already Turbo");
+
+  - id: hold_sequence
+    mode: single
+    then: 
+      - if: 
+          condition:
+            lambda: 'return (id(previous_state) != "Hold");'
+          then:
+            - logger.log: "Hold sequence started"
+            - script.execute: idle_sequence
+            - delay: 60min
+            - logger.log: "Hold timer elapsed"
+            - lambda: !lambda |-
+                std::string old_state = {id(previous_state)};
+                ESP_LOGD("custom", "Previous state: %s", old_state.c_str());
+                if (old_state == "High") {
+                  id(hrv_state).publish_state("High");
+                } else if (old_state == "Intermittent") {
+                  id(hrv_state).publish_state("Intermittent");
+                } else if (old_state == "Low") {
+                  id(hrv_state).publish_state("Low");
+                } else if (old_state == "Idle") {
+                  id(hrv_state).publish_state("Idle");
+                } else {
+                  ESP_LOGD("custom", "Error in Hold, it may have been interrupted by a new command");
+                }
+          else:
+            - lambda: !lambda ESP_LOGD("custom", "State already Hold");
