@@ -1,4 +1,7 @@
-# Air Exchanger v0.1.0
+# Air Exchanger v0.1.1
+# Known Issues
+  # 1. If air exchanger is in turbo/hold and hold/turbo is enabled, the previous state will be lost and it will be unable to resume normal function
+  # 2. Intermittent Custom is a bad name
 esphome:
   name: air-exchanger
   friendly_name: Air Exchanger
@@ -29,30 +32,30 @@ api:
 ota:
   password: !secret ota_password  
 
-i2c:
-  - id: "i2cbus"
-    sda: GPIO18
-    scl: GPIO19
-    scan: true
+# i2c:
+#   - id: "i2cbus"
+#     sda: GPIO18
+#     scl: GPIO19
+#     scan: true
 
 wifi:
   ssid: !secret wifi_ssid
   password: !secret wifi_password
-  reboot_timeout: 90min 
+  reboot_timeout: 150min 
   manual_ip:
     static_ip: 192.168.0.94
     gateway: 192.168.0.1
     subnet: 255.255.255.0
   # power_save_mode: none
 
-esp32_ble_tracker:
-  scan_parameters:
-    interval: 1100ms
-    window: 1100ms
-    active: true
+# esp32_ble_tracker:
+#   scan_parameters:
+#     interval: 1100ms
+#     window: 1100ms
+#     active: true
 
-bluetooth_proxy:
-  active: true
+# bluetooth_proxy:
+#   active: true
 
 globals:
   - id: previous_state
@@ -66,22 +69,6 @@ globals:
     type: int
     initial_value: '66'
 
-bme680_bsec:
-  - address: 0x76
-    i2c_id: "i2cbus"
-    # temperature_offset: 0.0
-    iaq_mode: static
-    sample_rate: lp
-    state_save_interval: 6h
-    id: bme680_stale
-  - address: 0x77
-    i2c_id: "i2cbus"
-    # temperature_offset: 0.0
-    iaq_mode: static
-    sample_rate: lp
-    state_save_interval: 6h
-    id: bme680_fresh
-
 
 select:
   - platform: template
@@ -89,7 +76,7 @@ select:
     id: mode
     options:
       - "Max"
-      - "Intermittent"
+      # - "Intermittent"
       - "Intermittent (Custom)"
       - "Min"
       - "Idle"
@@ -122,6 +109,16 @@ text_sensor:
       then: 
         lambda: |-
           std::string state_value = x;  //get trigger value
+
+          if (state_value != "Turbo" && id(turbo_switch).state) { // If turbo_switch is on despite not being in Turbo mode
+            ESP_LOGD("Custom", "The Turbo Sequence was turned off by a mode change");
+            id(turbo_switch).publish_state(false);
+          }
+          if (state_value != "Hold" && id(hold_switch).state) { // If hold_switch is on despite not being in Hold mode
+            ESP_LOGD("Custom", "The Hold Sequence was turned off by a mode change");
+            id(hold_switch).publish_state(false);
+          }
+
           if (state_value == "Max") {
             id(fan_high).execute();
           } else if (state_value == "Intermittent") {
@@ -131,9 +128,9 @@ text_sensor:
           } else if (state_value == "Min") {
             id(fan_low).execute();
           } else if (state_value == "Turbo") {
-            id(turbo_sequence).execute();
+            id(fan_high).execute();
           } else if (state_value == "Hold") {
-            id(hold_sequence).execute();
+            id(idle_sequence).execute();
           } else {
             id(idle_sequence).execute();
           }
@@ -169,74 +166,6 @@ text_sensor:
           } else {
             id(air_cfm).publish_state(-1);
           }
-  
-  - platform: bme680_bsec
-    bme680_bsec_id: bme680_stale
-    iaq_accuracy:
-      name: "Stale IAQ Accuracy"
-
-  - platform: template
-    name: "Stale IAQ Classification"
-    icon: "mdi:checkbox-marked-circle-outline"
-    lambda: |-
-      if ( int(id(stale_iaq).state) <= 50) {
-        return {"Excellent"};
-      }
-      else if (int(id(stale_iaq).state) >= 51 && int(id(stale_iaq).state) <= 100) {
-        return {"Good"};
-      }
-      else if (int(id(stale_iaq).state) >= 101 && int(id(stale_iaq).state) <= 150) {
-        return {"Lightly polluted"};
-      }
-      else if (int(id(stale_iaq).state) >= 151 && int(id(stale_iaq).state) <= 200) {
-        return {"Moderately polluted"};
-      }
-      else if (int(id(stale_iaq).state) >= 201 && int(id(stale_iaq).state) <= 250) {
-        return {"Heavily polluted"};
-      }
-      else if (int(id(stale_iaq).state) >= 251 && int(id(stale_iaq).state) <= 350) {
-        return {"Severely polluted"};
-      }
-      else if (int(id(stale_iaq).state) >= 351) {
-        return {"Extremely polluted"};
-      }
-      else {
-        return {"error"};
-      }
-  
-  - platform: bme680_bsec
-    bme680_bsec_id: bme680_fresh
-    iaq_accuracy:
-      name: "Fresh IAQ Accuracy"
-
-  - platform: template
-    name: "Fresh IAQ Classification"
-    icon: "mdi:checkbox-marked-circle-outline"
-    lambda: |-
-      if ( int(id(fresh_iaq).state) <= 50) {
-        return {"Excellent"};
-      }
-      else if (int(id(fresh_iaq).state) >= 51 && int(id(fresh_iaq).state) <= 100) {
-        return {"Good"};
-      }
-      else if (int(id(fresh_iaq).state) >= 101 && int(id(fresh_iaq).state) <= 150) {
-        return {"Lightly polluted"};
-      }
-      else if (int(id(fresh_iaq).state) >= 151 && int(id(fresh_iaq).state) <= 200) {
-        return {"Moderately polluted"};
-      }
-      else if (int(id(fresh_iaq).state) >= 201 && int(id(fresh_iaq).state) <= 250) {
-        return {"Heavily polluted"};
-      }
-      else if (int(id(fresh_iaq).state) >= 251 && int(id(fresh_iaq).state) <= 350) {
-        return {"Severely polluted"};
-      }
-      else if (int(id(fresh_iaq).state) >= 351) {
-        return {"Extremely polluted"};
-      }
-      else {
-        return {"error"};
-      }
 
 switch:
   - platform: gpio
@@ -296,6 +225,83 @@ switch:
           id: fan_speed
           state: Idle
 
+  
+  - platform: restart
+    name: "Restart"
+
+
+  - platform: template
+    name: Turbo
+    id: turbo_switch
+    icon: mdi:weather-windy
+    optimistic: true  # Force it to retain it's state without lambda
+    restore_state: yes
+    restore_mode: RESTORE_DEFAULT_OFF
+    turn_on_action:
+      - logger.log: "Turbo sequence initiated"
+      - globals.set:
+          id: previous_state
+          value: !lambda |-
+            if (id(previous_state) == "Hold") {
+              return id(previous_state); // don't change previous state
+            } else if (id(previous_state) == "Turbo") {
+              ESP_LOGD("Error!", "This should be an impossible case!");  // The state can't be turbo unless the switch is on
+              return id(previous_state); // don't change previous state
+            } else {
+              return id(hrv_state).state; // store the previous state
+            }
+      - text_sensor.template.publish:
+          id: hrv_state
+          state: Turbo
+    turn_off_action:
+      - if:
+          condition: 
+            lambda: 'return (id(hrv_state).state == "Turbo");'
+          then: 
+            - logger.log: "Turbo sequence ended by switch"
+            - lambda: !lambda |-
+                std::string old_state = {id(previous_state)};
+                ESP_LOGD("custom", "Previous state: %s. Returned to previous state", old_state.c_str());
+                id(hrv_state).publish_state(old_state);
+          else: 
+            - logger.log: "Turbo sequence ended by mode change"
+
+  - platform: template
+    name: Hold
+    id: hold_switch
+    icon: mdi:fan-off
+    optimistic: true  # Force it to retain it's state without lambda
+    restore_state: yes
+    restore_mode: RESTORE_DEFAULT_OFF
+    turn_on_action:
+      - logger.log: "Hold sequence initiated"
+      - globals.set:
+          id: previous_state
+          value: !lambda |-
+            if (id(previous_state) == "Turbo") {
+              return id(previous_state); // don't change previous state
+            } else if (id(previous_state) == "Hold") {
+              ESP_LOGD("Error!", "This should be an impossible case!");  // The state can't be hold unless the switch is on
+              return id(previous_state); // don't change previous state
+            } else {
+              return id(hrv_state).state; // store the previous state
+            }
+      - text_sensor.template.publish:
+          id: hrv_state
+          state: Hold
+    turn_off_action:
+      - if:
+          condition: 
+            lambda: 'return (id(hrv_state).state == "Hold");'
+          then: 
+            - logger.log: "Hold sequence ended by switch"
+            - lambda: !lambda |-
+                std::string old_state = {id(previous_state)};
+                ESP_LOGD("custom", "Previous state: %s. Returned to previous state", old_state.c_str());
+                id(hrv_state).publish_state(old_state);
+          else: 
+            - logger.log: "Hold sequence ended by mode change"
+
 sensor:
   - platform: wifi_signal
     name: Wifi RSSI
@@ -330,46 +336,6 @@ sensor:
     filters:
       - multiply: 0.0000625 #estimate
 
-  - platform: bme680_bsec
-    bme680_bsec_id: bme680_stale
-    temperature: 
-      name: "Stale Temperature"
-    pressure:
-      name: "Stale Pressure"
-    humidity:
-      name: "Stale Humidity"
-    gas_resistance:
-      name: "Stale Gas Resistance"
-    iaq:
-      name: "Stale IAQ"
-      id: stale_iaq
-    # iaq_accuracy:
-    #   name: "Stale IAQ Accuracy"
-    co2_equivalent:
-      name: "Stale CO2 Equivalent"
-    breath_voc_equivalent:
-      name: "Stale Breath VOC Equivalent"
-
-  - platform: bme680_bsec
-    bme680_bsec_id: bme680_fresh
-    temperature: 
-      name: "Fresh Temperature"
-    pressure:
-      name: "Fresh Pressure"
-    humidity:
-      name: "Fresh Humidity"
-    gas_resistance:
-      name: "Fresh Gas Resistance"
-    iaq:
-      name: "Fresh IAQ"
-      id: fresh_iaq
-    # iaq_accuracy:
-    #   name: "Fresh IAQ Accuracy"
-    co2_equivalent:
-      name: "Fresh CO2 Equivalent"
-    breath_voc_equivalent:
-      name: "Fresh Breath VOC Equivalent"
-
 
 time:
   - platform: homeassistant
@@ -383,66 +349,6 @@ time:
           - sensor.integration.reset: air_cumulative
           - sensor.integration.reset: air_changes
 
-#   - platform: template
-#     id: fan_speed_float
-#     internal: true
-#     lambda: |-
-#       int state = (id(high).state << 2) | (id(intermittent).state << 1) | (id(low).state);
-#       switch (state) {
-#         case 0:
-#           return 0;     //idle
-#         case 1:
-#           return 0.66;  //min
-#         case 2:
-#           return 0.33;  //intermittent
-#         case 4:
-#           return 1;     //max
-#         default:
-#           return -1;
-#       }
-
-# fan:
-#   - platform: speed
-#     output: fan_speed_float
-#     name: Air Exchanger
-#     speed_count: 3
-    # on_speed_set:
-    #   - lambda: |-
-
-button:
-  - platform: template
-    name: Turbo
-    id: turbo_button
-    icon: mdi:car-turbocharger
-    on_press:
-      - globals.set:
-          id: previous_state
-          value: !lambda |-
-            if ( (id(previous_state) == "Turbo") || (id(previous_state) == "Hold") ) {
-              return id(previous_state); //don't change previous state
-            } else {
-              return id(hrv_state).state;
-            }
-      - text_sensor.template.publish:
-          id: hrv_state
-          state: Turbo
-
-  - platform: template
-    name: Hold
-    id: hold_botton
-    icon: mdi:fan-off
-    on_press:
-      - globals.set:
-          id: previous_state
-          value: !lambda |-
-            if ( (id(previous_state) == "Turbo") || (id(previous_state) == "Hold") ) {
-              return id(previous_state); //don't change previous state
-            } else {
-              return id(hrv_state).state;
-            }
-      - text_sensor.template.publish:
-          id: hrv_state
-          state: Hold
 
 script:
   - id: idle_sequence
@@ -506,50 +412,3 @@ script:
               state: "Intermittent (Custom)"     
           then:
             script.execute: fan_intermittent_custom
-
-  - id: turbo_sequence
-    mode: single
-    then: 
-      - if: 
-          condition:
-            lambda: 'return (id(previous_state) != "Turbo");'
-          then:
-            - logger.log: "Turbo sequence started"
-            - script.execute: fan_high
-            - delay: 60min
-            - logger.log: "Hold timer elapsed"
-            - lambda: !lambda |-
-                std::string old_state = {id(previous_state)};
-                ESP_LOGD("custom", "Previous state: %s", old_state.c_str());
-                id(hrv_state).publish_state(old_state);
-                ESP_LOGD("custom", "Turbo Sequence ended");
-          else:
-            - lambda: !lambda ESP_LOGD("custom", "State already Turbo");
-
-  - id: hold_sequence
-    mode: single
-    then: 
-      - if: 
-          condition:
-            lambda: 'return (id(previous_state) != "Hold");'
-          then:
-            - logger.log: "Hold sequence started"
-            - script.execute: idle_sequence
-            - delay: 60min
-            - logger.log: "Hold timer elapsed"
-            - lambda: !lambda |-
-                std::string old_state = {id(previous_state)};
-                ESP_LOGD("custom", "Previous state: %s", old_state.c_str());
-                if (old_state == "High") {
-                  id(hrv_state).publish_state("High");
-                } else if (old_state == "Intermittent") {
-                  id(hrv_state).publish_state("Intermittent");
-                } else if (old_state == "Low") {
-                  id(hrv_state).publish_state("Low");
-                } else if (old_state == "Idle") {
-                  id(hrv_state).publish_state("Idle");
-                } else {
-                  ESP_LOGD("custom", "Error in Hold, it may have been interrupted by a new command");
-                }
-          else:
-            - lambda: !lambda ESP_LOGD("custom", "State already Hold");
