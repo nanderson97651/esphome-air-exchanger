@@ -1,7 +1,6 @@
-# Air Exchanger v0.1.1
+# Air Exchanger v0.1.2
 # Known Issues
-  # 1. If air exchanger is in turbo/hold and hold/turbo is enabled, the previous state will be lost and it will be unable to resume normal function
-  # 2. Intermittent Custom is a bad name
+  # 1. Intermittent Custom is a bad name
 esphome:
   name: air-exchanger
   friendly_name: Air Exchanger
@@ -167,6 +166,14 @@ text_sensor:
             id(air_cfm).publish_state(-1);
           }
 
+  # Debug sensors
+  - platform: template
+    icon: mdi:bug
+    name: Last State
+    id: last_state
+    lambda: return id(previous_state);
+
+
 switch:
   - platform: gpio
     name: Short
@@ -242,29 +249,27 @@ switch:
       - globals.set:
           id: previous_state
           value: !lambda |-
-            if (id(previous_state) == "Hold") {
+            std::string old_state = {id(previous_state)};
+            std::string current_state = {id(hrv_state).state};
+            if (current_state == "Hold") {
+              ESP_LOGD("custom", "Hold -> Turbo, previous state (%s) not changed", old_state.c_str());
               return id(previous_state); // don't change previous state
             } else if (id(previous_state) == "Turbo") {
               ESP_LOGD("Error!", "This should be an impossible case!");  // The state can't be turbo unless the switch is on
               return id(previous_state); // don't change previous state
             } else {
+              ESP_LOGD("custom", "New previous state: %s", current_state.c_str());
               return id(hrv_state).state; // store the previous state
             }
       - text_sensor.template.publish:
           id: hrv_state
           state: Turbo
     turn_off_action:
-      - if:
-          condition: 
-            lambda: 'return (id(hrv_state).state == "Turbo");'
-          then: 
-            - logger.log: "Turbo sequence ended by switch"
-            - lambda: !lambda |-
-                std::string old_state = {id(previous_state)};
-                ESP_LOGD("custom", "Previous state: %s. Returned to previous state", old_state.c_str());
-                id(hrv_state).publish_state(old_state);
-          else: 
-            - logger.log: "Turbo sequence ended by mode change"
+      - logger.log: "Turbo sequence ended by switch"
+      - lambda: !lambda |-
+          std::string old_state = {id(previous_state)};
+          ESP_LOGD("custom", "Previous state: %s. Returned to previous state", old_state.c_str());
+          id(hrv_state).publish_state(old_state);
 
   - platform: template
     name: Hold
@@ -278,29 +283,27 @@ switch:
       - globals.set:
           id: previous_state
           value: !lambda |-
-            if (id(previous_state) == "Turbo") {
+            std::string old_state = {id(previous_state)};
+            std::string current_state = {id(hrv_state).state};
+            if (current_state == "Turbo") {
+              ESP_LOGD("custom", "Turbo -> Hold, previous state (%s) not changed", old_state.c_str());
               return id(previous_state); // don't change previous state
             } else if (id(previous_state) == "Hold") {
               ESP_LOGD("Error!", "This should be an impossible case!");  // The state can't be hold unless the switch is on
               return id(previous_state); // don't change previous state
             } else {
+              ESP_LOGD("custom", "New previous state: %s", current_state.c_str());
               return id(hrv_state).state; // store the previous state
             }
       - text_sensor.template.publish:
           id: hrv_state
           state: Hold
     turn_off_action:
-      - if:
-          condition: 
-            lambda: 'return (id(hrv_state).state == "Hold");'
-          then: 
-            - logger.log: "Hold sequence ended by switch"
-            - lambda: !lambda |-
-                std::string old_state = {id(previous_state)};
-                ESP_LOGD("custom", "Previous state: %s. Returned to previous state", old_state.c_str());
-                id(hrv_state).publish_state(old_state);
-          else: 
-            - logger.log: "Hold sequence ended by mode change"
+      - logger.log: "Hold sequence ended by switch"
+      - lambda: !lambda |-
+          std::string old_state = {id(previous_state)};
+          ESP_LOGD("custom", "Previous state: %s. Returned to previous state", old_state.c_str());
+          id(hrv_state).publish_state(old_state);
 
 sensor:
   - platform: wifi_signal
