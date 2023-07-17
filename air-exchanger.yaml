@@ -1,14 +1,22 @@
-# Air Exchanger v0.1.2
+# Air Exchanger v0.1.3
 # Known Issues
   # 1. Intermittent Custom is a bad name
 esphome:
   name: air-exchanger
   friendly_name: Air Exchanger
   on_boot:
-    priority: 250
+    priority: -100 #execute after everything else has initialized
     then:
       # Force the hrv_state automation to run on boot to return any previously running scripts
-      - lambda: id(hrv_state).publish_state(id(hrv_state).state);
+      - lambda: |-
+          if (( id(turbo_switch).state ) || ( id(hold_switch).state )) {
+            // If 'Turbo' or 'Hold' enabled, just restore 'previous_state' to proper value
+            id(previous_state) = id(mode).state;
+          }
+          else {
+            // Else restore 'hrv_state' to the current 'mode'
+            id(hrv_state).publish_state(id(mode).state);
+          }
 
 esp32:
   board: esp32dev
