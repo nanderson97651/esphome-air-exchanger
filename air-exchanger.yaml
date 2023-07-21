@@ -1,4 +1,4 @@
-# Air Exchanger v0.1.3
+# Air Exchanger v0.1.4
 # Known Issues
   # 1. Intermittent Custom is a bad name
 esphome:
@@ -250,7 +250,6 @@ switch:
     id: turbo_switch
     icon: mdi:weather-windy
     optimistic: true  # Force it to retain it's state without lambda
-    restore_state: yes
     restore_mode: RESTORE_DEFAULT_OFF
     turn_on_action:
       - logger.log: "Turbo sequence initiated"
@@ -284,7 +283,6 @@ switch:
     id: hold_switch
     icon: mdi:fan-off
     optimistic: true  # Force it to retain it's state without lambda
-    restore_state: yes
     restore_mode: RESTORE_DEFAULT_OFF
     turn_on_action:
       - logger.log: "Hold sequence initiated"
